@@ -8,7 +8,6 @@
 var _ = require('lodash')
 var Eraro = require('eraro')
 var Jsonic = require('jsonic')
-
 var error = Eraro({
   package: 'seneca',
   msgmap: {
@@ -228,7 +227,7 @@ function balance_client (options) {
     if (!targets[index]) {
       return done( error('no-current-target', {msg: msg}) )
     }
-
+    // TODO David: Here is where the round robin happens.
     targets[index].action.call( seneca, msg, done )
     targetstate.index = ( index + 1 ) % targets.length
   }
@@ -242,11 +241,11 @@ function add_target ( seneca, target_map, pat, action ) {
 
   targetstate = targetstate || { index: 0, targets: [] }
   target_map[patkey] = targetstate
-
+  // TODO David: here is where the targets get stored.
   targetstate.targets.push( { action: action, id: action.id } )
 }
 
-
+// TODO David: Pattern key... investigate why.
 function make_patkey ( seneca, pat ) {
   if ( _.isString( pat ) ) {
     pat = Jsonic(pat)
