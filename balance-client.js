@@ -15,6 +15,7 @@ var error = Eraro({
     'no-current-target': 'No targets are currently active for message <%=msg%>'
   }
 })
+var visigoth = require('visigoth')
 
 
 module.exports = balance_client
@@ -30,11 +31,11 @@ var preload = balance_client.preload = function () {
         makehandle: function (config) {
           var instance_map =
                 (global_target_map[seneca.id] =
-                 global_target_map[seneca.id] || {id: seneca.id})
+                 global_target_map[seneca.id] || {})
 
           var target_map =
                 (instance_map[config.pg] =
-                 instance_map[config.pg] || {pg: config.pg, id: Math.random()})
+                 instance_map[config.pg] || {})
 
           target_map.pg = config.pg
 
@@ -96,25 +97,20 @@ function balance_client (options) {
     role: 'transport', type: 'balance', get: 'target-map'
   }, get_client_map)
 
-
   function remove_target ( target_map, pat, config ) {
     var action_id = config.id || seneca.util.pattern(config)
     var patkey = make_patkey( seneca, pat )
     var targetstate = target_map[patkey]
 
-    targetstate = targetstate || { index: 0, targets: [] }
+    targetstate = targetstate || visigoth()
     target_map[patkey] = targetstate
+    targetstate.remove_by(function(target, index) {
+        if (target.id === action_id) {
+            return true;
+        }
+        return false;
+    });
 
-    for ( var i = 0; i < targetstate.targets.length; i++ ) {
-      if ( action_id === targetstate.targets[i].id ) {
-        break
-      }
-    }
-
-    if ( i < targetstate.targets.length ) {
-      targetstate.targets.splice(i, 1)
-      targetstate.index = 0
-    }
   }
 
 
@@ -196,40 +192,32 @@ function balance_client (options) {
       closer.prior(close_msg, done)
     })
   }
-
-
+  
   function observeModel (seneca, msg, targetstate, done) {
-    if ( 0 === targetstate.targets.length ) {
+    if ( 0 === targetstate.upstreams$.length ) {
       return done(error('no-current-target', {msg: msg}))
     }
-
+    
     var first = true
-    for ( var i = 0; i < targetstate.targets.length; i++ ) {
-      var target = targetstate.targets[i]
-      target.action.call(seneca, msg, function () {
-        if ( first ) {
-          done.apply(seneca, arguments)
-          first = false
-        }
-      })
-    }
+    targetstate.choose_all(function(target, index) {
+        target.action.call(seneca, msg, function () {
+          if ( first ) {
+            done.apply(seneca, arguments)
+            first = false
+          }
+        })
+    });
   }
 
 
   function consumeModel (seneca, msg, targetstate, done) {
-    var targets = targetstate.targets
-    var index = targetstate.index
-
-    if (!targets[index]) {
-      index = targetstate.index = 0
+    try {
+        targetstate.choose(function(target) {
+            target.action.call( seneca, msg, done )
+        });
+    } catch (e) {
+        return done( error('no-current-target', {msg: msg}) )
     }
-
-    if (!targets[index]) {
-      return done( error('no-current-target', {msg: msg}) )
-    }
-    // TODO David: Here is where the round robin happens.
-    targets[index].action.call( seneca, msg, done )
-    targetstate.index = ( index + 1 ) % targets.length
   }
 }
 
@@ -239,13 +227,11 @@ function add_target ( seneca, target_map, pat, action ) {
   var patkey = make_patkey( seneca, pat )
   var targetstate = target_map[patkey]
 
-  targetstate = targetstate || { index: 0, targets: [] }
+  targetstate = targetstate || visigoth()
   target_map[patkey] = targetstate
-  // TODO David: here is where the targets get stored.
-  targetstate.targets.push( { action: action, id: action.id } )
+  targetstate.add({ action: action, id: action.id })
 }
 
-// TODO David: Pattern key... investigate why.
 function make_patkey ( seneca, pat ) {
   if ( _.isString( pat ) ) {
     pat = Jsonic(pat)
