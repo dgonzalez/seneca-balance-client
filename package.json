@@ -32,7 +32,8 @@
   "dependencies": {
     "eraro": "0.4.1",
     "jsonic": "0.2.2",
-    "lodash": "4.0.0"
+    "lodash": "4.0.0",
+    "visigoth": "file:../visigoth"
   },
   "devDependencies": {
     "code": "1.5.x",
