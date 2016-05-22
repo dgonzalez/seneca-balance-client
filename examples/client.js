@@ -7,9 +7,7 @@ require('seneca')()
 
   .ready( function () {
 
-    for ( var i = 0; i < 4; i++ ) {
-      this.act( 'a:1,x:1', console.log )
-    }
+    this.act( 'a:1,x:1', console.log )
 
   })
 

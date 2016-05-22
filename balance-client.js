@@ -3,11 +3,17 @@
   Copyright (c) 2015-2016, Richard Rodger and other contributors.
 */
 
+// TODO David: handle duplicates in the add (merge conflict)
+// TODO David: better approach for observe (possibly a new model... yes!)
+
 'use strict'
 
 var _ = require('lodash')
 var Eraro = require('eraro')
 var Jsonic = require('jsonic')
+
+var visigoth = require('visigoth');
+
 var error = Eraro({
   package: 'seneca',
   msgmap: {
@@ -15,14 +21,21 @@ var error = Eraro({
     'no-current-target': 'No targets are currently active for message <%=msg%>'
   }
 })
-var visigoth = require('visigoth')
 
 
 module.exports = balance_client
 
 var global_target_map = {}
 
-var preload = balance_client.preload = function () {
+var option_defaults = {
+  debug: {
+    client_updates: false
+  }
+}
+
+var global_options = {}
+
+balance_client.preload = function () {
   var seneca = this
 
   seneca.options({
@@ -31,16 +44,16 @@ var preload = balance_client.preload = function () {
         makehandle: function (config) {
           var instance_map =
                 (global_target_map[seneca.id] =
-                 global_target_map[seneca.id] || {})
+                 global_target_map[seneca.id] || {id: seneca.id})
 
           var target_map =
                 (instance_map[config.pg] =
-                 instance_map[config.pg] || {})
+                 instance_map[config.pg] || {pg: config.pg, id: Math.random()})
 
           target_map.pg = config.pg
 
           return function ( pat, action ) {
-            add_target( seneca, target_map, pat, action )
+            add_target( seneca, target_map, config, pat, action )
           }
         }
       }
@@ -60,17 +73,15 @@ function balance_client (options) {
     actor: consumeModel
   }
 
-  // Merge default options with any provided by the caller
-  options = seneca.util.deepextend({}, options)
+  options = seneca.util.deepextend(option_defaults, options)
 
-  // fix for Seneca 1.0.0
-  if ('1.0.0' === seneca.version) {
-    preload.call(seneca)
-  }
+  // hack to make add_target debug logging work
+  // to be fixed when seneca plugin handling is rewritten to not need preload
+  global_options = seneca.util.deepextend(global_options, options)
 
   var model = options.model
 
-  if (model === undefined) {
+  if (null == model) {
     model = modelMap.consume
   }
   else if (typeof model === 'string') {
@@ -97,23 +108,30 @@ function balance_client (options) {
     role: 'transport', type: 'balance', get: 'target-map'
   }, get_client_map)
 
+
   function remove_target ( target_map, pat, config ) {
     var action_id = config.id || seneca.util.pattern(config)
     var patkey = make_patkey( seneca, pat )
     var targetstate = target_map[patkey]
+    var found = false
 
-    targetstate = targetstate || visigoth()
+    targetstate = targetstate || visigoth();
     target_map[patkey] = targetstate
-    targetstate.remove_by(function(target, index) {
-        if (target.id === action_id) {
-            return true;
+    
+    targetstate.remove_by(function(target) {
+        if (!found) {
+            found = action_id == target.id;
+        } else {
+            return action_id == target.id;
         }
-        return false;
+        return found;
     });
 
+    if (options.debug && options.debug.client_updates) {
+      seneca.log.info('remove', patkey, action_id, found)
+    }
   }
-
-
+  
   function add_client (msg, done) {
     msg.config = msg.config || {}
 
@@ -169,7 +187,7 @@ function balance_client (options) {
     var model = client_options.model || consumeModel
     model = _.isFunction(model) ? model : ( modelMap[model] || consumeModel )
 
-    tu.make_client(make_send, client_options,clientdone);
+    tu.make_client(make_send, client_options, clientdone)
 
     function make_send (spec, topic, send_done) {
       seneca.log.debug('client', 'send', topic + '_res', client_options, seneca)
@@ -179,9 +197,7 @@ function balance_client (options) {
         var targetstate = target_map[patkey]
 
         if ( targetstate ) {
-          model(this, msg, targetstate, function(err, response) {
-            done(err, response);
-          });
+          model(this, msg, targetstate, done)
           return
         }
 
@@ -194,46 +210,58 @@ function balance_client (options) {
       closer.prior(close_msg, done)
     })
   }
-  
+
+
   function observeModel (seneca, msg, targetstate, done) {
-    if ( 0 === targetstate.upstreams$.length ) {
+    if ( 0 === targetstate.targets.length ) {
       return done(error('no-current-target', {msg: msg}))
     }
     
-    var first = true
-    targetstate.choose_all(function(target, index) {
-        target.action.call(seneca, msg, function () {
-          if ( first ) {
-            done.apply(seneca, arguments)
-            first = false
-          }
-        })
+    var first = true;
+    targetstate.choose_all(function(target) {
+        target.action.call(seneca, msg, function() {
+            if ( first ) {
+              done.apply(seneca, arguments)
+              first = false
+            }
+        });
     });
   }
 
 
   function consumeModel (seneca, msg, targetstate, done) {
-    try {
-        targetstate.choose(function(err, target) {
-            target.action.call( seneca, msg, function(err, result) {
-              done(err,result);
-            });
-        });
-    } catch (e) {
-        return done( error('no-current-target', {msg: msg}) )
-    }
+    var targets = targetstate.targets
+    var index = targetstate.index
+    //console.log(targetstate.upstreams$[0]);
+    targetstate.choose(function(error, target) {
+        console.log(target);
+        if (error) {
+            return done( error('no-current-target', {msg: msg}) );
+        }
+        target.action.call(seneca, msg, done);
+    });
   }
 }
 
-
-// TODO: handle duplicates
-function add_target ( seneca, target_map, pat, action ) {
+function add_target ( seneca, target_map, config, pat, action ) {
   var patkey = make_patkey( seneca, pat )
   var targetstate = target_map[patkey]
+  var add = true
 
-  targetstate = targetstate || visigoth()
+  targetstate = targetstate || visigoth();
   target_map[patkey] = targetstate
-  targetstate.add({ action: action, id: action.id })
+
+  // TODO David: handle duplicates...
+  if (add) {
+    targetstate.add({ action: action,
+                               id: action.id,
+                               config: config
+                             })
+  }
+
+  if (global_options.debug && global_options.debug.client_updates) {
+    seneca.log.info('add', patkey, action.id, add)
+  }
 }
 
 function make_patkey ( seneca, pat ) {
