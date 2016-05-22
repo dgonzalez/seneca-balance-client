@@ -169,7 +169,7 @@ function balance_client (options) {
     var model = client_options.model || consumeModel
     model = _.isFunction(model) ? model : ( modelMap[model] || consumeModel )
 
-    tu.make_client(make_send, client_options, clientdone)
+    tu.make_client(make_send, client_options,clientdone);
 
     function make_send (spec, topic, send_done) {
       seneca.log.debug('client', 'send', topic + '_res', client_options, seneca)
@@ -179,7 +179,9 @@ function balance_client (options) {
         var targetstate = target_map[patkey]
 
         if ( targetstate ) {
-          model(this, msg, targetstate, done)
+          model(this, msg, targetstate, function(err, response) {
+            done(err, response);
+          });
           return
         }
 
@@ -212,8 +214,10 @@ function balance_client (options) {
 
   function consumeModel (seneca, msg, targetstate, done) {
     try {
-        targetstate.choose(function(target) {
-            target.action.call( seneca, msg, done )
+        targetstate.choose(function(err, target) {
+            target.action.call( seneca, msg, function(err, result) {
+              done(err,result);
+            });
         });
     } catch (e) {
         return done( error('no-current-target', {msg: msg}) )
