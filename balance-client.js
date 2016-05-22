@@ -232,9 +232,8 @@ function balance_client (options) {
   function consumeModel (seneca, msg, targetstate, done) {
     var targets = targetstate.targets
     var index = targetstate.index
-    //console.log(targetstate.upstreams$[0]);
+
     targetstate.choose(function(error, target) {
-        console.log(target);
         if (error) {
             return done( error('no-current-target', {msg: msg}) );
         }
