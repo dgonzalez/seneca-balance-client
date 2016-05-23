@@ -107,7 +107,36 @@ function balance_client (options) {
   seneca.add({
     role: 'transport', type: 'balance', get: 'target-map'
   }, get_client_map)
+  
+  seneca.add({
+      role: 'transport', type: 'balance', get: 'stats'
+  }, get_stats)
 
+  function get_stats(msg, done) {
+      msg.config = msg.config || {}
+
+      if ( !msg.config.pg ) {
+        msg.config.pg = this.util.pincanon( msg.config.pin || msg.config.pins )
+      }
+      var instance_map = global_target_map[seneca.id] || {}
+      var target_map = instance_map[msg.config.pg] || {}
+      // TODO David: something funny goes on here.
+      var visigoth = target_map[''];
+      var stats = [];
+      if (visigoth.upstreams$.lengh <= 0) {
+          return done(null, stats);
+      }
+      
+      for (var i = 0; i < visigoth.upstreams$.length; i++) {
+          var upstream = visigoth.upstreams$[i];
+          var upstream_stats = {};
+          upstream_stats.status = upstream.meta$.status;
+          upstream_stats.target = upstream.target.id;
+          upstream_stats.stats = upstream.meta$.stats;
+          stats.push(upstream_stats)
+      }
+      done(null, stats);
+  }
 
   function remove_target ( target_map, pat, config ) {
     var action_id = config.id || seneca.util.pattern(config)
@@ -230,14 +259,19 @@ function balance_client (options) {
 
 
   function consumeModel (seneca, msg, targetstate, done) {
-    var targets = targetstate.targets
-    var index = targetstate.index
 
-    targetstate.choose(function(error, target) {
+    targetstate.choose(function(error, target,errored, stats) {
         if (error) {
             return done( error('no-current-target', {msg: msg}) );
         }
-        target.action.call(seneca, msg, done);
+        var before = Date.now();
+        target.action.call(seneca, msg, function(err, result) {
+            done(err, result);
+            var after = Date.now();
+            stats.totalResponseTime = (stats.totalResponseTime || 0) + (after - before);
+            stats.numberOfCalls = (stats.numberOfCalls || 0) + 1;
+            stats.averageResponseTime = stats.totalResponseTime / stats.numberOfCalls;
+        });
     });
   }
 }
